@@ -1,0 +1,242 @@
+LWC
+
+contactSearch.html
+<template>
+    <!-- Creates a Lightning card with the title "Contact Search Records" and the icon "standard:contact" -->
+    <lightning-card title="Contact Search Records" icon-name="standard:contact">
+
+        <!-- Creates a Lightning layout with multiple rows and items aligned vertically to the bottom -->
+        <lightning-layout multiple-rows="true" vertical-align="end">
+        
+            <!-- Creates a Lightning layout item with a size of 4 and padding, which contains a search input field -->
+            <lightning-layout-item size="4" padding="around-small">          
+                <lightning-input    
+                                type="search" 
+                                label="Search Contacts" 
+                                placeholder="type here..."
+                                value={searchKey} 
+                                onchange={handleInputChange}>
+                </lightning-input>
+            </lightning-layout-item>
+        
+            <!-- Creates a Lightning layout item with a size of 2 and padding, which contains a button to add a new contact -->
+            <lightning-layout-item size="2" padding="around-small">
+                <lightning-button 
+                                label="Add New Contact" 
+                                variant="Neutral" 
+                                name="Create Contact" 
+                                onclick={handleContactCreate}
+                                style="margin-left:775px;">
+                </lightning-button>
+            </lightning-layout-item>
+
+            <!-- Creates a Lightning layout item with padding, which contains a datatable to display contact records -->
+            <lightning-layout-item padding="around-small">
+                <lightning-datatable    key-field="Id"
+                                        data={contactList.data}
+                                        columns={columns}
+                                        hide-checkbox-column="true"
+                                        onrowaction={callRowAction}>
+                </lightning-datatable>
+            </lightning-layout-item> 
+        
+        </lightning-layout>
+    </lightning-card>
+</template>
+
+
+
+
+contactsearch.js
+import { LightningElement, wire} from 'lwc';
+import { NavigationMixin } from 'lightning/navigation';
+import { ShowToastEvent } from 'lightning/platformShowToastEvent';
+import { deleteRecord } from 'lightning/uiRecordApi';
+import { refreshApex } from '@salesforce/apex';
+import searchContacts from '@salesforce/apex/WrapperContactController.searchContacts';
+
+//defining actions for each row of the table
+const actions = [
+                    { label: 'View', name: 'view' },
+                    { label: 'Edit', name: 'edit' },
+                    { label: 'Delete', name: 'delete' }
+                ];
+
+//defining columns for the table
+const COLUMNS = [
+                    { label: 'Name', fieldName: 'Name', type: 'text'},
+                    { label: 'Email', fieldName: 'Email', type: 'email' },
+                    { label: 'Mobile', fieldName: 'MobilePhone', type: 'phone' },
+                    { label: 'Billing City', fieldName: 'BillingCity', type: 'text' },
+                    { label: 'Billing State', fieldName: 'BillingState', type: 'text' },
+                    { label: '', type: 'action', typeAttributes: { rowActions: actions }, }
+                ];
+
+export default class ContactTable extends NavigationMixin(LightningElement) {
+
+    columns = COLUMNS;  // Initializing columns with defined values
+    contactList;        // Initializing contactList variable
+    searchKey;          // Initializing searchKey variable
+    
+    // this function will get value from text input 
+    handleInputChange(event) {
+        let searchKeys = event.target.value;
+        this.searchKey = searchKeys;            // setting the value of the search key variable with the input value
+        //window.console.log('Search Key: ',event.target.value);
+    }
+
+    // Retrieving contactList by calling wire with the Apex method and searchKey parameter
+    @wire(searchContacts, {textKey : '$searchKey'}) contactList;
+
+
+    //This function will create a new contact
+    handleContactCreate() {
+        this[NavigationMixin.Navigate]({
+            type: 'standard__objectPage',
+            attributes:
+            {
+                objectApiName: 'Contact',
+                actionName: 'new'
+            }
+        });
+    }
+
+    //This function will return view, edit, delete the record based what will select in action
+    callRowAction(event) {
+        const actionName = event.detail.action.name;
+        const row = event.detail.row;
+        this.recordId = row.Id;
+        switch (actionName) {
+            case 'view':
+                this[NavigationMixin.Navigate]({
+                    type: 'standard__recordPage',
+                    attributes: {
+                        recordId: row.Id,
+                        actionName: 'view'
+                    }
+                });
+                break;
+
+            case 'edit':
+                this[NavigationMixin.Navigate]({
+                    type: 'standard__recordPage',
+                    attributes: {
+                        recordId: row.Id,
+                        objectApiName: 'Contact',
+                        actionName: 'edit'
+                    }
+                });
+                return refreshApex(this.contactList); // Refreshing contactList after editing the record
+                break;
+
+            case 'delete':
+                this.delContact();
+                return refreshApex(this.contactList); 
+                break;
+        }
+    }
+
+    //This function created for deleting the record
+    delContact() {
+
+        //Invoke the deleteRecord to delete a record
+        deleteRecord(this.recordId)
+        
+            .then(() => {
+
+                // We are firing a toast message
+                
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Success',
+                        message: 'Record is successfully deleted',
+                        variant: 'success'
+                    })
+                );
+                return refreshApex(this.contactList);
+            })
+            .catch((error) => {
+                console.log(error);
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Sorry',
+                        message: 'Cannot delete this record since it is associated with a case',
+                        variant: 'error'
+                    })
+                );
+            });
+    }
+}
+
+
+
+
+
+WrapperContactController.cls
+
+public with sharing class WrapperContactController {
+
+    /* method decorated with "@AuraEnabled(Cacheable=true)" that accepts a string parameter "textKey"
+    and returns a list of "ContactWrapper" objects. */
+    /*@AuraEnabled: Method can be called from an Aura component and for the response to be processed by JavaScript 
+    (Cacheable=true):  will save query result in cache memory of browser */
+
+    @AuraEnabled(Cacheable=true)
+    public static List<ContactWrapper> searchContacts(String textKey) 
+    {
+        // Concatenate the wildcard search term "%"
+        textKey = '%'+ textKey +'%';
+
+        // New list to hold the "ContactWrapper" objects
+        List<ContactWrapper> wrapprConList = new List<ContactWrapper>();
+
+        // retrieve a list of up to 10 records whose "Name" field matches the "textKey" search term
+        List<Contact> conList = [SELECT Name, Email, MobilePhone, 
+                                                                Account.BillingCity, Account.BillingState 
+                                 FROM Contact 
+                                            WHERE Name LIKE: textKey 
+                                            OR   Email LIKE: textKey
+                                            OR   MobilePhone LIKE: textKey
+                                            OR   Account.BillingCity LIKE: textKey
+                                            OR   Account.BillingState LIKE: textKey 
+                                 LIMIT 10];
+        
+        for(Contact con :conList ) 
+        {
+            // Create a new "ContactWrapper" object for each Contact record
+            ContactWrapper newWrp = new ContactWrapper();
+
+            /*  Assign the values of some fields from the Contact and its related Account 
+             to the corresponding fields of the ContactWrapper object */
+            newWrp.Id = con.Id;
+            newWrp.Name = con.Name;
+            newWrp.Email = con.Email;
+            newWrp.MobilePhone = con.MobilePhone;
+            newWrp.BillingCity = con.Account.BillingCity;
+            newWrp.BillingState = con.Account.BillingState; 
+            
+            // Add the ContactWrapper object to the list
+            wrapprConList.add(newWrp);
+        }
+        return wrapprConList;
+    }
+    
+    // This is a nested class named "ContactWrapper"
+    public class ContactWrapper 
+    {
+        /*  These are the fields of the "ContactWrapper" class decorated with "@AuraEnabled" 
+        to make them available for Lightning component data binding  */
+        @AuraEnabled 
+        public Id Id { get; set; } 
+        @AuraEnabled 
+        public String Name { get; set; }
+        @AuraEnabled 
+        public String Email { get; set; }
+        @AuraEnabled 
+        public String MobilePhone {get; set;}
+        @AuraEnabled 
+        public String BillingCity { get; set; }
+        @AuraEnabled 
+        public String BillingState { get; set; }
+    }
+}
